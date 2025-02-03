@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="initial-scale=1.0, width=device-width" />
+    <title>ExifデータからGoogleマップに表示</title>
+    <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+    <script
+      src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBfTe9gdBp8vyQSArbe--BwzKWPDgWl0yA&callback=initMap"
+      async
+      defer
+    ></script>
+    <style>
+      #map {
+        height: 400px;
+        width: 100%;
+      }
+      #locationTable {
+        margin-top: 20px;
+        font-size: 8px;
+        overflow: scroll;
+        width: calc(100vw - 1rem);
+        height: 25vh;
+      }
+      #locationTable table {
+        border: 1px solid black;
+        border-collapse: collapse;
+        width: 100%;
+      }
+      #locationTable th,
+      #locationTable td {
+        border: 1px solid black;
+        padding: 5px;
+      }
+      .sticky_table thead th {
+        background-color: silver;
+        /* 縦スクロール時に固定する */
+        position: -webkit-sticky;
+        position: sticky;
+        top: 0;
+        /* tbody内のセルより手前に表示する */
+        z-index: 1;
+      }
+      .sticky_table th:first-child {
+        /* 横スクロール時に固定する */
+        position: -webkit-sticky;
+        position: sticky;
+        left: 0;
+      }
+      .sticky_table thead th:first-child {
+        /* ヘッダー行内の他のセルより手前に表示する */
+        z-index: 2;
+      }
+      #saveLocationBtn {
+        width: 80vw;
+        height: 20vw;
+      }
+
+      #clearLocationBtn,
+      #updateMapBtn {
+        width: 10rem;
+        height: 2rem;
+      }
+    </style>
+  </head>
+
+  <body>
+    <button id="saveLocationBtn">現在位置を保存</button>
+    <input type="color" id="markerColor" value="#ff0000" />
+
+    <details>
+      <summary>他の機能</summary>
+
+      <p>写真から位置情報を取得して地図に表示します。(複数選択可)</p>
+      <input type="file" id="photos" accept="image/*" multiple />
+
+      <hr />
+
+      <button id="clearLocationBtn">全データ削除</button>
+
+      <button id="updateMapBtn">地図情報更新</button>
+
+      <hr />
+      <div class="dropdown-container">
+        <label for="period">📅 期間:</label>
+        <select id="period">
+          <option value="2025年2月〜7月" selected="">2025年2月〜7月</option>
+          <option value="2025年8月〜12月">2025年8月〜12月</option>
+          <option value="2026年1月〜7月">2026年1月〜7月</option>
+        </select>
+      </div>
+      <div class="dropdown-container">
+        <label for="category">📌 種類:</label>
+        <select id="category">
+          <option value="街宣チラシ配り" selected="">1. 街宣チラシ配り</option>
+          <option value="チラシのポスティング">2. チラシのポスティング</option>
+          <option value="ポスター貼り">3. ポスター貼り</option>
+          <option value="選挙ポスター掲示板貼り">
+            4. 選挙ポスター掲示板貼り
+          </option>
+        </select>
+      </div>
+      <div>
+        <label for="user_id">👤 ユーザーID:</label>
+        <input type="text" id="user_id" value="heureka" />
+      </div>
+
+      <button id="registerLocation">📌 地図に登録</button>
+    </details>
+    <div id="locationTable"></div>
+    <div id="map"></div>
+
+    <script>
+
+
+      document
+        .getElementById("saveLocationBtn")
+        .addEventListener("click", saveCurrentLocation);
+      document
+        .getElementById("clearLocationBtn")
+        .addEventListener("click", clearLocationData);
+      document
+        .getElementById("updateMapBtn")
+        .addEventListener("click", updateMap);
+      document
+        .getElementById("registerLocation")
+        .addEventListener("click", registerLocation);
+
+      let map;
+      let markers = {};
+      let spreadsheetUrl = "";
+
+      function uuid() {
+        return URL.createObjectURL(new Blob()).slice(-36);
+      }
+
+      function getMarkerColor() {
+        return document.getElementById("markerColor").value;
+      }
+
+      function initMap() {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(function (position) {
+            map = new google.maps.Map(document.getElementById("map"), {
+              center: {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude,
+              },
+              zoom: 20,
+            });
+          });
+        } else {
+          alert("Geolocation is not supported by this browser.");
+          map = new google.maps.Map(document.getElementById("map"), {
+            center: { lat: 35.6895, lng: 139.6917 }, // 東京を初期位置に設定
+            zoom: 8,
+          });
+        }
+
+        //// 地図がアイドル状態（全ての初期化が完了した状態）に達した時に実行するイベントリスナーを設定
+        //google.maps.event.addListenerOnce(map, "idle", function () {
+        //  console.log("The map is now fully loaded and idle.");
+        //  // ここで地図が利用可能になった後の処理を行う
+        //});
+
+        //// または、tilesloadedイベントを使ってタイルが全てロードされたことを確認する
+        //google.maps.event.addListenerOnce(map, "tilesloaded", function () {
+        //  console.log("All map tiles have been loaded.");
+        //  // ここで地図が利用可能になった後の処理を行う
+        //});
+
+        // 一定時間後に地図が利用可能かどうかチェック
+        setTimeout(function () {
+          if (map.getBounds()) {
+            // getBoundsが存在する場合、地図は利用可能とみなせる
+            console.log("Map is now usable.");
+            updateMap();
+          } else {
+            console.error("Map is not yet ready or there was an error.");
+          }
+        }, 2000); // 例えば2秒後にチェック
+      }
+
+      document
+        .getElementById("photos")
+        .addEventListener("change", function (event) {
+          var files = event.target.files;
+          var storedData = localStorage.getItem("locationData");
+          var locationData = storedData ? JSON.parse(storedData) : {};
+
+          for (var i = 0; i < files.length; i++) {
+            (function (file) {
+              var reader = new FileReader();
+
+              reader.onload = function (e) {
+                var image = new Image();
+                image.onload = function () {
+                  EXIF.getData(image, function () {
+                    var exifData = EXIF.getAllTags(this);
+                    var lat = exifData.GPSLatitude; //  EXIF.getTag(this, "GPSLatitude");
+                    var lon = exifData.GPSLongitude; // EXIF.getTag(this, "GPSLongitude");
+                    var dateTime = exifData.GPSDateStamp ?? "不明";
+
+                    if (lat && lon) {
+                      var latitude = lat[0] + lat[1] / 60 + lat[2] / 3600;
+                      var longitude = lon[0] + lon[1] / 60 + lon[2] / 3600;
+
+                      locationData[uuid()] = {
+                        visible: true,
+                        color: getMarkerColor(),
+                        latitude: latitude,
+                        longitude: longitude,
+                        timestamp: dateTime,
+                      };
+                    }
+
+                    // ローカルストレージに保存
+                    localStorage.setItem(
+                      "locationData",
+                      JSON.stringify(locationData)
+                    );
+                    displayLocationTable(locationData);
+                    updateMap();
+                  });
+                };
+                image.src = e.target.result;
+              };
+
+              reader.readAsDataURL(file);
+            })(files[i]);
+          }
+        });
+
+      function saveCurrentLocation() {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(function (position) {
+            var newLocation = {
+              visible: true,
+              color: getMarkerColor(),
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              timestamp: new Date().toISOString(),
+            };
+
+            var storedData = localStorage.getItem("locationData");
+            var locationData = storedData ? JSON.parse(storedData) : {};
+            locationData[uuid()] = newLocation;
+            localStorage.setItem("locationData", JSON.stringify(locationData));
+            displayLocationTable(locationData);
+            updateMap();
+
+            map.setCenter({
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+            });
+          });
+        } else {
+          alert("Geolocation is not supported by this browser.");
+        }
+      }
+
+      function clearLocationData() {
+        localStorage.removeItem("locationData");
+        document.getElementById("locationTable").innerHTML = "";
+        for (var key in markers) {
+          markers[key].setMap(null);
+        }
+        alert("ローカルストレージのデータが削除されました。");
+      }
+
+      function deleteLocationData(key) {
+        var storedData = localStorage.getItem("locationData");
+        var locationData = storedData ? JSON.parse(storedData) : {};
+        delete locationData[key];
+        if (markers[key]) {
+          markers[key].setMap(null);
+          delete markers[key];
+        }
+        localStorage.setItem("locationData", JSON.stringify(locationData));
+        // カレント行を削除
+        var row = document.querySelector(`tr[data-key="${key}"]`);
+        if (row) {
+          row.parentNode.removeChild(row);
+        }
+      }
+
+      function displayLocationTable(locationData) {
+        var table =
+          "<table class='sticky_table'>" +
+          "<thead><tr>" +
+          "<th style='width:1.3rem'>表示</th>" +
+          "<th>緯度</th>" +
+          "<th>経度</th>" +
+          "<th>日時</th>" +
+          "<th style='width:2rem'></th>" +
+          "</tr><thead><tbody>";
+        // locationData を逆順にソート
+        var sortedKeys = Object.keys(locationData).sort((a, b) => {
+          return (
+            new Date(locationData[b].timestamp) -
+            new Date(locationData[a].timestamp)
+          );
+        });
+
+        sortedKeys.forEach(function (key) {
+          if (locationData.hasOwnProperty(key)) {
+            let location = locationData[key];
+            table += `<tr data-key="${key}">`;
+            let checked = location.visible ? "checked" : "";
+            table += `<td><input type="checkbox" class="locationCheckbox" value="${key}" ${checked}></td>`;
+            table += `<td>${location.latitude}</td>`;
+            table += `<td>${location.longitude}</td>`;
+            table += `<td>${location.timestamp}</td>`;
+            table += `<td><input type="button" value="削除"  onclick="deleteLocationData('${key}')"></td>`;
+            table += "</tr>";
+          }
+        });
+
+        table += "</tbody></table>";
+        document.getElementById("locationTable").innerHTML = table;
+
+        var checkboxes = document.querySelectorAll(".locationCheckbox");
+        checkboxes.forEach(function (checkbox) {
+          checkbox.addEventListener("change", toggleLocationVisibility);
+        });
+      }
+
+      function toggleLocationVisibility(event) {
+        var index = event.target.value;
+        var storedData = localStorage.getItem("locationData");
+        var locationData = storedData ? JSON.parse(storedData) : {};
+        locationData[index].visible = event.target.checked;
+        localStorage.setItem("locationData", JSON.stringify(locationData));
+        updateMap();
+      }
+
+      function updateMap() {
+        var storedData = localStorage.getItem("locationData");
+        if (storedData) {
+          var locationData = JSON.parse(storedData);
+          Object.entries(locationData).forEach(function ([key, location]) {
+            let marker = undefined;
+            if (markers[key]) {
+              marker = markers[key];
+            } else {
+              marker = addMarker(
+                location.latitude,
+                location.longitude,
+                key,
+                location.color
+              );
+              markers[key] = marker;
+            }
+
+            marker.setVisible(location.visible);
+          });
+        }
+      }
+
+      function getMarker(color) {
+        return (
+          "data:image/svg+xml," +
+          encodeURIComponent(
+            '<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">' +
+              '<path d="M16 0c-5.523 0-10 4.477-10 10 0 10 10 22 10 22s10-12 10-22c0-5.523-4.477-10-10-10zm0 16c-3.314 0-6-2.686-6-6s2.686-6 6-6 6 2.686 6 6-2.686 6-6 6z" fill="' +
+              color +
+              '"/>' +
+              "</svg>"
+          )
+        );
+      }
+
+      // Google Mapにマーカーを追加
+      function addMarker(latitude, longitude, key, color) {
+        let marker = new google.maps.Marker({
+          key: key, // Markerのkeyを保持(APIにはkeyがないので、自前で保持)
+          position: { lat: latitude, lng: longitude },
+          map: map,
+          draggable: true,
+          title: "ドラッグして微調整",
+          icon: {
+            url: getMarker(color),
+            scaledSize: new google.maps.Size(32, 32),
+          },
+        });
+
+        // ドラッグが完了したときのイベントリスナーを追加
+        google.maps.event.addListener(marker, "dragend", function (event) {
+          console.log(
+            "マーカーの新しい位置:",
+            event.latLng.lat(),
+            event.latLng.lng(),
+            this.key
+          );
+
+          let storedData = localStorage.getItem("locationData");
+          if (storedData) {
+            let locationData = JSON.parse(storedData);
+            locationData[this.key].latitude = event.latLng.lat();
+            locationData[this.key].longitude = event.latLng.lng();
+            localStorage.setItem("locationData", JSON.stringify(locationData));
+            displayLocationTable(locationData);
+          }
+        });
+        return marker;
+      }
+
+      function registerLocation() {
+        let period = document.getElementById("period").value;
+        let category = document.getElementById("category").value;
+        let user_id = document.getElementById("user_id").value;
+        let button = document.getElementById("registerLocation");
+
+        button.disabled = true;
+
+        fetch(spreadsheetUrl,{
+          method: "POST",
+          mode: "no-cors",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            period: period,
+            category: category,
+            user_id: user_id,
+            locationData: JSON.parse(localStorage.getItem("locationData")),
+          }),
+        }).then(() => {
+          alert("データを登録しました。");
+        }).error(() => {
+          alert("データの登録に失敗しました。");
+        }).finally(() => {
+          button.disabled = false;
+        });
+      }
+
+      // ページ読み込み時にローカルストレージからデータを読み込んで表示
+      window.onload = function () {
+        var storedData = localStorage.getItem("locationData");
+        if (storedData) {
+          var locationData = JSON.parse(storedData);
+          displayLocationTable(locationData);
+        }
+        initMap();
+      };
+    </script>
+  </body>
+</html>
